@@ -9,13 +9,17 @@ Libero OSC_POSE action space.
 
 import argparse
 import base64
+from datetime import datetime, timezone
 import io
 import json
 import os
+import subprocess
+import sys
 import time
 
 import numpy as np
 import requests
+import torch
 from libero.libero import benchmark, get_libero_path
 from libero.libero.envs import OffScreenRenderEnv
 from PIL import Image
@@ -34,6 +38,12 @@ def parse_args():
     parser.add_argument("--task-limit", type=int, default=None)
     parser.add_argument("--max-steps", type=int, default=None)
     parser.add_argument("--wait-steps", type=int, default=10)
+    parser.add_argument("--camera-resolution", type=int, default=256)
+    parser.add_argument("--image-size", type=int, default=224)
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--model-id", default="openvla/openvla-7b", help="Remote model identity, recorded only.")
+    parser.add_argument("--unnorm-key", default="bridge_orig", help="Remote action un-normalization key, recorded only.")
+    parser.add_argument("--server-decode", default="do_sample_false", help="Remote decode mode, recorded only.")
     parser.add_argument(
         "--image-transform",
         choices=("rotate180", "vertical", "none"),
@@ -45,14 +55,52 @@ def parse_args():
     return parser.parse_args()
 
 
-def preprocess_image(obs, image_transform):
+def get_git_metadata():
+    def git_output(*args):
+        try:
+            return subprocess.check_output(
+                ["git", *args],
+                cwd=os.path.dirname(os.path.abspath(__file__)),
+                text=True,
+                stderr=subprocess.DEVNULL,
+            ).strip()
+        except Exception:
+            return None
+
+    tracked_status = git_output("status", "--short", "--untracked-files=no") or ""
+    untracked = git_output("ls-files", "--others", "--exclude-standard") or ""
+    return {
+        "commit": git_output("rev-parse", "HEAD"),
+        "branch": git_output("branch", "--show-current"),
+        "tracked_dirty": bool(tracked_status),
+        "tracked_status_short": tracked_status.splitlines(),
+        "untracked_files": untracked.splitlines(),
+    }
+
+
+def summarize_grips(grips):
+    if not grips:
+        return {
+            "raw_grip_min": None,
+            "raw_grip_max": None,
+            "raw_grip_close_ratio": None,
+        }
+    grip_array = np.array(grips)
+    return {
+        "raw_grip_min": float(np.min(grip_array)),
+        "raw_grip_max": float(np.max(grip_array)),
+        "raw_grip_close_ratio": float(np.mean(grip_array < 0.5)),
+    }
+
+
+def preprocess_image(obs, image_transform, image_size):
     frame = obs["agentview_image"]
     if image_transform == "rotate180":
         # Matches the official OpenVLA Libero eval preprocessing helper.
         frame = frame[::-1, ::-1]
     elif image_transform == "vertical":
         frame = frame[::-1]
-    return Image.fromarray(frame).resize((224, 224), Image.Resampling.LANCZOS)
+    return Image.fromarray(frame).resize((image_size, image_size), Image.Resampling.LANCZOS)
 
 
 def query_openvla(server_url, image, instruction, timeout):
@@ -98,17 +146,52 @@ def get_max_steps(task_suite, override):
     return defaults.get(task_suite, 220)
 
 
-def get_initial_states_or_none(bench, task_id):
+def load_init_states(path):
     try:
-        return bench.get_task_init_states(task_id)
-    except FileNotFoundError as exc:
-        print(f"  init_states missing, falling back to env.reset(): {exc}")
-        return None
+        return torch.load(path, weights_only=False)
+    except TypeError:
+        return torch.load(path)
+
+
+def get_initial_states_or_none(bench, task_id):
+    task = bench.get_task(task_id)
+    candidate_paths = [
+        (
+            "configured",
+            os.path.join(
+                get_libero_path("init_states"),
+                task.problem_folder,
+                task.init_states_file,
+            ),
+        ),
+        (
+            "bundled",
+            os.path.join(
+                get_libero_path("benchmark_root"),
+                "init_files",
+                task.problem_folder,
+                task.init_states_file,
+            ),
+        ),
+    ]
+
+    for source, path in candidate_paths:
+        if os.path.exists(path):
+            print(f"  init_states using {source} file: {path}")
+            states = load_init_states(path)
+            return states, source, path
+
+    missing_paths = ", ".join(path for _, path in candidate_paths)
+    print(f"  init_states missing, falling back to env.reset(): {missing_paths}")
+    return None, "env_reset", None
 
 
 def main():
     args = parse_args()
     max_steps = get_max_steps(args.task_suite, args.max_steps)
+    run_started_at = datetime.now(timezone.utc).isoformat()
+    git_metadata = get_git_metadata()
+    np.random.seed(args.seed)
 
     print("=" * 60)
     print("Libero + OpenVLA-7B  (Base Model Baseline)")
@@ -116,7 +199,9 @@ def main():
     print(f"  Server: {args.server_url}")
     print(f"  Suite: {args.task_suite}")
     print(f"  Episodes/task: {args.episodes}")
+    print(f"  Camera/image: {args.camera_resolution}px -> {args.image_size}px")
     print(f"  Image transform: {args.image_transform}")
+    print(f"  Seed: {args.seed}")
     print(f"  Gripper: bridge [0,1] -> Libero binarized [-1,+1]")
 
     bench = benchmark.get_benchmark_dict()[args.task_suite]()
@@ -130,20 +215,23 @@ def main():
     for task_id in range(n_tasks):
         task = bench.get_task(task_id)
         bddl_file = os.path.join(get_libero_path("bddl_files"), args.task_suite, task.bddl_file)
-        initial_states = get_initial_states_or_none(bench, task_id)
+        initial_states, init_source, init_path = get_initial_states_or_none(bench, task_id)
+        init_count = len(initial_states) if initial_states is not None else 0
 
         env = OffScreenRenderEnv(
             bddl_file_name=bddl_file,
-            camera_heights=224,
-            camera_widths=224,
+            camera_heights=args.camera_resolution,
+            camera_widths=args.camera_resolution,
             has_renderer=False,
             has_offscreen_renderer=True,
             reward_shaping=True,
         )
+        env.seed(args.seed)
 
         task_successes = 0
         task_rewards = []
         task_grips = []
+        episode_results = []
 
         for ep in range(args.episodes):
             obs = env.reset()
@@ -161,7 +249,7 @@ def main():
                     continue
 
                 try:
-                    img = preprocess_image(obs, args.image_transform)
+                    img = preprocess_image(obs, args.image_transform, args.image_size)
                     raw = query_openvla(args.server_url, img, task.language, args.request_timeout)
                     action = bridge_to_libero_osc(raw)
                     ep_grips.append(float(raw[6]))
@@ -191,6 +279,19 @@ def main():
                     f"close_ratio={close_ratio:.1%}"
                 )
 
+            episode_results.append(
+                {
+                    "episode": ep,
+                    "success": int(bool(done)),
+                    "reward": float(ep_reward),
+                    "steps": int(step + 1),
+                    "elapsed_sec": float(elapsed),
+                    "init_state_source": init_source,
+                    "init_state_index": int(ep % init_count) if init_count else None,
+                    **summarize_grips(ep_grips),
+                }
+            )
+
             print(
                 f"  [{task_id+1}/{n_tasks}] {task.name[:45]:<45} "
                 f"ep={ep+1}/{args.episodes} r={ep_reward:+.3f} done={done} "
@@ -205,9 +306,11 @@ def main():
                 "total": args.episodes,
                 "rate": rate,
                 "avg_reward": float(np.mean(task_rewards)) if task_rewards else 0.0,
-                "raw_grip_min": float(np.min(task_grips)) if task_grips else None,
-                "raw_grip_max": float(np.max(task_grips)) if task_grips else None,
-                "raw_grip_close_ratio": float(np.mean(np.array(task_grips) < 0.5)) if task_grips else None,
+                "init_state_source": init_source,
+                "init_state_path": init_path,
+                "init_state_count": init_count,
+                **summarize_grips(task_grips),
+                "episodes": episode_results,
             }
         )
         env.close()
@@ -221,14 +324,28 @@ def main():
 
     payload = {
         "config": {
+            "run_started_at": run_started_at,
+            "argv": sys.argv,
+            "git": git_metadata,
             "server_url": args.server_url,
             "task_suite": args.task_suite,
             "episodes": args.episodes,
             "task_limit": args.task_limit,
             "max_steps": max_steps,
             "wait_steps": args.wait_steps,
+            "camera_resolution": args.camera_resolution,
+            "image_size": args.image_size,
             "image_transform": args.image_transform,
-            "action_source": "openvla/openvla-7b bridge_orig",
+            "image_resize": "PIL.Image.Resampling.LANCZOS",
+            "seed": args.seed,
+            "request_timeout": args.request_timeout,
+            "model_id": args.model_id,
+            "unnorm_key": args.unnorm_key,
+            "server_decode": args.server_decode,
+            "action_source": f"{args.model_id} {args.unnorm_key}",
+            "position_scale": 20.0,
+            "rotation_scale": 2.0,
+            "action_clip": [-1.0, 1.0],
             "gripper_conversion": "raw < 0.5 => +1 close, raw >= 0.5 => -1 open",
         },
         "results": results,
@@ -238,7 +355,7 @@ def main():
     }
 
     with open(args.output, "w") as f:
-        json.dump(payload, f, indent=2)
+        json.dump(payload, f, indent=2, ensure_ascii=False)
     print(f"\n  Results: {args.output}")
 
 
