@@ -1,0 +1,31 @@
+# Sensitive files
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.crt
+*.pub
+*secret*
+*password*
+secrets.local.md
+
+# Local AI context / handoff notes
+CONTEXT_FOR_CODEX.md
+handoff/
+
+# Python cache and virtual env
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Large generated artifacts
+*.gif
+*.mp4
+*.avi
+*.png
+*.jpg
+*.jpeg
+libero_frames/
+results/
