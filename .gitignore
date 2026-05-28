@@ -13,6 +13,9 @@ secrets.local.md
 # Local AI context / handoff notes
 CONTEXT_FOR_CODEX.md
 handoff/
+!handoff/
+handoff/*
+!handoff/HANDOFF_TEMPLATE.md
 
 # Python cache and virtual env
 __pycache__/

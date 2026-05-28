@@ -1,214 +1,123 @@
-# 具身智能 VLA 项目计划书 v3
+# VLA Libero 执行计划
 
-## 1. 项目定位
+Version: execution-v1 | 2026-05-28
 
-**主线：** PI0-FAST 全流程（基座 → SFT微调 → RL微调）→ MuJoCo/Isaac Sim 仿真验证
-**对照：** OpenVLA-7B 基座模型 → MuJoCo/Isaac Sim 仿真验证
-**亮点：** 双模型对比 + 强化学习微调 + Sim-to-Sim 跨仿真器分析
+## 1. 当前目标
 
-## 2. 实验矩阵
+在 Libero/MuJoCo 中完成 OpenVLA-7B 和 PI0-FAST 的可复现实验闭环：
 
-```
-                    PI0-FAST (主线)               OpenVLA-7B (对照)
-                   ┌──────┼──────┐              ┌──────┘
-                   │      │      │              │
-                基座    SFT    RL              基座
-                 ✅      ✅     ✅              ✅
-                 │      │      │              │
-                 └──────┴──────┘              │
-                        │                     │
-                   MuJoCo 仿真                 │
-                   Isaac Sim 仿真              │
-                        │                     │
-                   Sim-to-Sim                 │
-```
+1. 基座模型评估
+2. SFT 微调和评估
+3. RL 微调和评估
+4. 结果对比、文档和 GitHub 整理
 
-**4 组实验：**
+主线先跑通 Libero/MuJoCo。Isaac Sim 只作为可选扩展，不阻塞主线进度。
 
-| # | 模型 | 训练 | 仿真 |
-|---|------|------|------|
-| 1 | PI0-FAST | 基座 | MuJoCo + Isaac Sim |
-| 2 | PI0-FAST | SFT LoRA | MuJoCo + Isaac Sim |
-| 3 | PI0-FAST | RL (PPO) | MuJoCo + Isaac Sim |
-| 4 | OpenVLA-7B | 基座 (4-bit) | MuJoCo + Isaac Sim |
+## 2. 当前事实
 
-## 3. GPU 预算和租卡策略
+- 本地工作目录：`/media/li/新加卷/isaacsim/workspace`
+- 本地仿真主线：Libero + MuJoCo
+- 远程训练/推理：AutoDL RTX 4090D
+- OpenVLA server：远程 `6008`，本地隧道 `localhost:8000`
+- PI0 server：远程 `6009`，本地隧道 `localhost:6009`
+- Isaac Sim 4.5 本地 GUI 渲染有黑屏问题，暂不作为必要路径
 
-### 可用 GPU 和价格
+## 3. 实验范围
 
-| GPU | 显存 | 单价 | 适合什么 |
-|-----|------|------|----------|
-| 4090/4090D | 24GB | ¥1.88 | 推理、SFT微调、代码调试 |
-| VGPU 32G | 32GB | ¥1.68 | 推理、SFT微调 |
-| 5090/5090D | 32GB | ¥2.78 | SFT微调、RL调试 |
-| VGPU 48G | 48GB | ¥2.88 | RL训练（性价比高） |
-| RTX PRO 6000 | 48GB | ¥5.98 | RL训练 |
-| H800 | 80GB | ¥8.88 | RL正式训练（最快） |
+### 必做
 
-### 各阶段预算
+| # | 模型 | 阶段 | 环境 | 输出 |
+|---|------|------|------|------|
+| 1 | OpenVLA-7B | 基座 | Libero/MuJoCo | success rate、reward、latency |
+| 2 | PI0-FAST | 基座 | Libero/MuJoCo | success rate、reward、latency、action 格式诊断 |
+| 3 | PI0-FAST | SFT | Libero/MuJoCo | 微调 checkpoint、评估结果 |
+| 4 | PI0-FAST | RL/PPO | Libero/MuJoCo | RL checkpoint、训练曲线、评估结果 |
 
-| 阶段 | 任务 | 推荐卡 | 预计时长 | 费用 |
-|------|------|--------|----------|------|
-| 1 | PI0 基座评估 | 4090D | 1-2h | ¥2-4 |
-| 2 | OpenVLA 基座评估 | 4090D | 1-2h | ¥2-4 |
-| 3 | PI0 SFT 微调 | 4090D | 30min | ~¥1 |
-| 4 | PI0 SFT 评估 | 4090D | 1-2h | ¥2-4 |
-| 5 | **RL 代码调试** | 4090D | 2-4h | ¥4-8 |
-| 6 | **RL 正式训练** | H800 或 VGPU48G | 10-20h | ¥90-180 |
-| 7 | RL 模型评估 | 4090D | 1-2h | ¥2-4 |
-| 8 | Isaac Sim 渲染 | 本地 4060 | - | 免费 |
+### 可选扩展
 
-**总预算估算：¥110-210**
+| 扩展 | 触发条件 | 说明 |
+|------|----------|------|
+| Isaac Sim 复现实验 | Libero 主线完成后还有时间 | 只做补充验证和展示，不阻塞 SFT/RL |
+| Sim-to-Sim 对比 | Isaac Sim 可用后 | 对比 MuJoCo 与 Isaac Sim 的成功率、动作分布和失败模式 |
+| OpenVLA RL | PI0 RL 不可行时 | 复用 PPO 环境和评估管道作为备选 |
 
-> 策略：代码调试和短任务用 4090D（¥1.88/h），确定没问题后切 H800 跑 RL 正式训练。不租双卡——单 H800 足够。
-> 
-> Isaac Sim headless 渲染用本地 4060（免费），或者租 4090D 时顺便渲染（4090 有 RT Core）。
+## 4. 近期优先级
 
-## 4. 为什么主推 PI0 而不是 OpenVLA？
+### P0：整理执行基线
 
-- PI0 是 **Flow Matching** 架构，动作连续自然，比 OpenVLA 的离散 token 更适合精细操作
-- 远程已有 `pi0_fast_libero` checkpoint（11GB），不是从零开始
-- OpenVLA 已经做过基座评估了，做对照就行——重复做全套价值不大
-- 两个模型同时做全套确实是重复劳动，省下的时间可以加深 PI0 RL
+- 确认 OpenVLA 基座评估脚本输出稳定落盘
+- 统一结果文件命名和字段
+- 记录每次评估的模型、checkpoint、任务、episode 数、端口、commit id
 
-**PI0 RL 可行性：** PI0 的 Flow Matching 采样过程是可微的，可以作为 stochastic policy 接入 PPO。JAX 版本的 PPO 有现成实现（`purejaxrl`）。
+### P1：修复 PI0 Libero 接入
 
-**如果 PI0 RL 不行怎么办：** RL 环境（Libero + reward）是模型无关的，写一次复用。PI0 RL 卡住了，半天就能把 OpenVLA 接上去跑 RL。不浪费时间。
+- 明确 PI0 输出动作语义：delta joint、absolute joint 或其他格式
+- 用真实 Libero robot state 替代零 state
+- 决定控制器路径：
+  - 优先：PI0 输出转 Libero `JOINT_POSITION`
+  - 备选：PI0 输出映射到 `OSC_POSE`
+- 跑 1 个任务、3-5 个 episode 的冒烟测试
 
-## 5. 技术细节
+### P2：SFT
 
-### 5.1 PI0 推理管道
+- 下载并整理 Libero spatial 演示数据
+- 先用小样本跑通训练和加载
+- 再扩大到完整 spatial 数据
+- 评估 SFT checkpoint，与基座做同任务对比
 
-```
-本地 Libero 截图 → base64 → POST /act (远程 4090D)
-                              ↓
-                    PI0 模型推理 (JAX)
-                              ↓
-                    返回 7-dim 关节动作
-                              ↓
-                    Libero env.step()
-```
+### P3：RL/PPO
 
-远程 `pi0_server.py` 已在端口 6007。接入方式与 OpenVLA 完全一致（POST 图片+指令→返回动作），本地客户端改一行 URL 即可。
+- 先写环境 rollout、buffer、reward 记录和 checkpoint 保存
+- 4090D 上跑短训练，确认 loss、reward、显存和速度
+- 再决定是否租更大卡跑正式训练
 
-### 5.2 PI0 SFT 微调 (LoRA)
+### P4：文档和展示
 
-复用远程已有的 `finetune_v2.py` 框架，将模型从 OpenVLA 换成 PI0，数据源换成 Libero。
+- README 写可复现实验流程
+- results 中保留 JSON/CSV 指标
+- assets 只放压缩后的必要 GIF/MP4，大文件不入 git
+- 对外项目摘要等结果稳定后再写，不提前包装
 
-- 方法：LoRA rank=32
-- 数据：Libero spatial 10 任务演示数据
-- 时长：~30 分钟（4090D）
+## 5. 工程约束
 
-### 5.3 PI0 RL 微调 (PPO)
+- 敏感信息不进 git：SSH 密码、token、`.env`、本地 AI 上下文
+- 端口统一：
+  - OpenVLA：remote `6008` -> local `8000`
+  - PI0：remote `6009` -> local `6009`
+- 所有新增脚本默认支持 CLI 参数，不把远程地址、密码、checkpoint 写死
+- 评估脚本必须能在无 GUI 的情况下保存结果
+- 长任务必须写日志，避免只看终端输出
+- 每个阶段完成后提交一次小 commit
 
-```
-循环:
-  ┌─ Libero env.reset()
-  ├─ PI0 采样动作 a ~ π(·|image)
-  ├─ env.step(a) → reward, next_image
-  ├─ 存入 buffer: (image, a, reward, next_image)
-  ├─ 每 N 步更新:
-  │    - PPO clipped loss 更新 action head (LoRA)
-  │    - Critic (小型 MLP, 共享 vision feature) 回归 value
-  └─ 直到 reward 收敛
-```
+## 6. 预算策略
 
-关键设计：
-- 冻结视觉 backbone（不训，省显存）
-- 只更新 LoRA + action head
-- Critic 是独立小网络（~2M 参数），共享 ViT 特征
-- 奖励：Libero 自带 task reward
+| 阶段 | 推荐资源 | 预估 |
+|------|----------|------|
+| 基座评估 | 4090D | 1-4h |
+| SFT 调试 | 4090D | 1-2h |
+| SFT 正式 | 4090D 或 32G 卡 | 1-3h |
+| RL 调试 | 4090D | 2-5h |
+| RL 正式 | VGPU 48G 或 H800 | 10-20h |
 
-### 5.4 Sim-to-Sim 对比
+原则：先在 4090D 上跑通代码和数据闭环，再租更贵的卡跑长任务。
 
-```
-同一任务 "pick up the bowl"
-    ├── MuJoCo (Libero)  → 录 50 轮 action 轨迹
-    └── Isaac Sim        → 录 50 轮 action 轨迹
-                              ↓
-              对比：动作分布差异、成功率差异
-```
+## 7. 风险和处理
 
-## 6. 评估指标
-
-| 指标 | 说明 |
+| 风险 | 处理 |
 |------|------|
-| Success Rate | Libero 自动评测 |
-| Avg Reward | 每 episode 平均 |
-| Action Distribution | 动作均值/方差对比 |
-| Inference Time | ms/step |
-| Sim-to-Sim MSE | 同一模型在两 sim 上的动作差异 |
+| PI0 action 格式继续不匹配 | 先做状态/action 日志和单步 replay，再决定 controller |
+| PI0 SFT 代码成本过高 | 先完成 OpenVLA/PI0 基座对比，SFT 缩小范围 |
+| PPO 不收敛 | 保留 rollout、reward 曲线和失败分析；必要时切 OpenVLA RL |
+| Isaac Sim 不可用 | 不阻塞主线，只在文档里标记为可选扩展和已知限制 |
+| 远程实例重置 | 本地保留脚本、环境说明和 checkpoint 清单 |
 
-**最终对比表（README 核心）：**
+## 8. 完成标准
 
-| 模型 | 训练 | MuJoCo SR | Latency |
-|------|------|-----------|---------|
-| OpenVLA-7B | 基座 | XX% | XXms |
-| PI0-FAST | 基座 | XX% | XXms |
-| PI0-FAST | SFT | XX% | XXms |
-| PI0-FAST | RL | XX% | XXms |
+主线完成至少需要：
 
-## 7. GitHub 仓库
-
-```
-jinjian-li/vla-libero-benchmark/
-├── README.md                 ← 总览 + 对比表 + GIF
-├── docs/
-│   ├── setup.md              ← 环境搭建（本地+远程）
-│   ├── pipeline.md           ← 推理管道架构
-│   ├── training.md           ← SFT + RL 微调方案
-│   └── results.md            ← 完整评估报告
-├── scripts/
-│   ├── libero_eval.py        ← 批量评估
-│   ├── libero_pi0_client.py  ← PI0 客户端
-│   ├── libero_vla_client.py  ← OpenVLA 客户端
-│   ├── libero_ppo_trainer.py ← PPO 训练器
-│   └── isaac_vla_client.py   ← Isaac Sim 客户端
-├── remote/
-│   ├── pi0_server.py         ← PI0 推理服务
-│   ├── vla_server.py         ← OpenVLA 推理服务
-│   ├── finetune_sft.py       ← SFT LoRA 微调
-│   └── finetune_ppo.py       ← PPO 微调
-├── assets/demos/             ← GIF/MP4
-├── results/                  ← JSON/CSV
-└── configs/                  ← 超参数
-```
-
-## 8. 简历展示
-
-**项目名称:** VLA 模型对比评测与 RL 微调 — PI0/OpenVLA × MuJoCo/Isaac Sim 双平台验证
-
-**技术栈:** PI0-FAST, OpenVLA-7B, PPO, LoRA, Flow Matching, MuJoCo, Isaac Sim, Libero, JAX, PyTorch
-
-**核心产出 (预期):**
-- 构建 PI0/OpenVLA 双模型在 LIBERO 10 项操作任务上的标准化评测管道
-- 实现 PPO 强化学习微调 VLA 模型（冻结视觉 backbone + LoRA action head + 独立 Critic）
-- 完成 MuJoCo/Isaac Sim 双仿真器对比，分析物理引擎差异对策略的影响
-- 产出 4 组模型的完整性能对比表 + 并排演示 GIF
-
-## 9. 时间线
-
-| 阶段 | 内容 | 时长 | 租卡 |
-|------|------|------|------|
-| 1 | PI0 基座 + OpenVLA 基座评估 | 3-4h | 4090D ¥8 |
-| 2 | PI0 SFT 微调 + 评估 | 2-3h | 4090D ¥6 |
-| 3 | RL 代码调试 (4090D) | 3-5h | 4090D ¥10 |
-| 4 | RL 正式训练 (H800) | 10-20h | H800 ¥180 |
-| 5 | 全模型评估 + Sim-to-Sim | 3-4h | 4090D ¥8 |
-| 6 | 文档 + 简历 | 与 4/5 并行 | - |
-
-**实际总时长：~1.5-2 周**（阶段 4 纯训练等待，期间并行做阶段 6）
-
-**总预算：~¥220**
-
-## 10. 风险预案
-
-| 风险 | 概率 | 应对 |
-|------|------|------|
-| PI0 RL 训练不收敛 | 低-中 | RL 环境复用，切换 OpenVLA 接 PPO，半天 |
-| H800 租不到 | 低 | VGPU48G (¥2.88/h) 替代，慢 2-3× 但够用 |
-| PI0 JAX 版本兼容问题 | 中 | 固定版本，远程已有 working 环境 |
-
----
-
-Version: v3 | 2026-05-27
+- OpenVLA 基座 Libero/MuJoCo 评估结果
+- PI0 基座 Libero/MuJoCo 评估结果
+- PI0 SFT checkpoint 和评估结果
+- 一个 RL 调试结果或正式结果
+- README 中可复现运行命令
+- 结果表能解释成功率、reward、latency 和主要失败模式
