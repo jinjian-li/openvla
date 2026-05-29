@@ -10,77 +10,51 @@ Updated: 2026-05-29
 - Provides missing credentials only through local environment variables or private files.
 - Reviews major direction changes before expensive training runs.
 
-### Codex
+### Active Agent (Claude Code or Codex)
 
-- Owns technical decisions, task decomposition, architecture, code review, and complex implementation.
-- Defines task cards that Claude Code can execute mechanically.
-- Reviews Claude Code outputs before they become project direction or git history.
+- One agent owns the work continuously: analyze → implement → verify → record.
+- Does not switch agents unless the user explicitly asks, or the agent hits a high-risk decision it cannot resolve.
 - Keeps sensitive information out of tracked files.
 
-### Claude Code
+## Task Board and Handoff Rules
 
-- Executes explicit task cards from this board or `handoff/` notes.
-- Handles long mechanical work: batch edits, log summarization, command execution, result table cleanup, and documentation passes.
-- Reports exact commands, changed files, outputs, and blockers in a handoff note.
-- Does not invent new project scope without user or Codex approval.
+- `TASK_BOARD.md` is a progress overview for the user, not a strict scheduling system.
+- `handoff/*.md` files preserve context across restarts/disconnects/context loss.
+- Every agent must write a handoff note before stopping.
+- Before starting, read `TASK_BOARD.md` and the latest handoff note.
+
+## Current Phase
+
+OpenVLA baseline is verified (`0/3`, credible zero-shot failure). Moving to:
+
+1. PI0 baseline smoke test → baseline eval
+2. OpenVLA SFT on Libero data
+3. Evaluate fine-tuned model
 
 ## Current Task Cards
 
-| ID | Owner | Status | Task | Done When |
-|----|-------|--------|------|-----------|
-| T001 | Codex | Done | Convert `PROJECT_PLAN.md` to internal execution plan | Plan uses direct execution language, PI0 port is `6009`, Isaac Sim is optional |
-| T002 | Codex | Done | Add agent workflow files | `TASK_BOARD.md` and `handoff/HANDOFF_TEMPLATE.md` exist and are tracked safely |
-| T003 | Codex | Done | Summarize current OpenVLA baseline run | Summary written to ignored handoff note; deterministic 3-task result is available locally |
-| T004 | Codex | Ready | Review PI0 action interface | Decide controller strategy and define the next implementation card |
-| T005 | Claude Code | Blocked | Download or verify Libero SFT dataset | Waits for Codex/user to specify dataset source and storage path |
-| T006 | User | Ready | Confirm next paid GPU window | Decide when to run SFT/RL jobs and expected budget ceiling |
-| T007 | Codex | Done | Harden OpenVLA base eval metadata and init-state handling | Client records reproducibility metadata and uses bundled Libero `.pruned_init` files |
+| ID | Status | Task | Notes |
+|----|--------|------|-------|
+| T001 | Done | OpenVLA baseline eval path | Verified deterministic `0/3`, credible zero-shot result |
+| T002 | Done | Agent workflow files | `TASK_BOARD.md` + `handoff/` in place |
+| T003 | Ready | PI0 baseline smoke test | Run 1 task × 1 episode, verify client/server/tunnel work |
+| T004 | Ready | PI0 small baseline | 3 tasks × 1 episode, compare with OpenVLA |
+| T005 | Ready | Download Libero SFT dataset | `openvla/modified_libero_rlds` on remote |
+| T006 | Ready | OpenVLA SFT on Libero | Modify finetune script, run debug training |
+| T007 | Blocked | Full SFT + evaluation | Needs T005+T006 done first |
 
 ## OpenVLA Baseline Result
 
-Latest deterministic small baseline:
-
-```bash
-/media/li/新加卷/isaacsim/libero_env/bin/python3 -u libero_openvla_client.py \
-  --episodes 1 \
-  --task-limit 3 \
-  --output openvla_base_det_3tasks_1ep.json
-```
-
-Summary:
-
 - Commit: `55770e8`
 - Server decode: `do_sample_false`
-- Init states: bundled Libero `.pruned_init`, 50 per task
-- Image path: camera `256`, resize `224`, `rotate180`
-- Result: `0/3`, reward `0.0`, all three episodes ran 230 steps
-- Raw gripper: `0.0` throughout, converted to close commands
-
-Detailed note: `handoff/2026-05-29-openvla-baseline.md` (ignored by git).
-
-## Next Claude Code Card
-
-### T004 Assist: PI0 Action Interface Evidence Pack
-
-Goal: gather evidence for Codex's PI0 action-interface review without changing controller behavior.
-
-Steps:
-
-1. Inspect `libero_pi0_client.py`, `pi0_libero_inference.py`, and any PI0 server/client logs.
-2. Identify the action vector shape, units, and whether outputs look like joint targets, joint deltas, or Cartesian deltas.
-3. Locate where Libero robot state is passed or omitted.
-4. Summarize the current PI0 result JSON and failure symptoms.
-5. Write findings into a new ignored handoff note under `handoff/`.
-
-Constraints:
-
-- Do not commit.
-- Do not modify evaluation scripts unless Codex explicitly asks.
-- Do not include credentials, SSH host passwords, or private environment values.
-- Do not use `rm`.
+- Init states: bundled Libero `.pruned_init`
+- Image: camera `256` → resize `224`, `rotate180`
+- Result: `0/3`, reward `0.0`
+- Detailed note: `handoff/2026-05-29-openvla-baseline.md`
 
 ## Review Rules
 
-- Claude Code output is treated as draft until Codex reviews it.
-- Any change that affects model training, controller behavior, reward logic, or result interpretation needs Codex review.
-- Any command that spends GPU time or starts a long remote job needs user approval unless already authorized in a task card.
+- Default: active agent owns all decisions and runs continuously.
+- User approval needed before: spending GPU money on long runs, changing action semantics / controller / reward logic, deleting important files.
+- If results conflict with expectations, pause and discuss with user before changing direction.
+- Agent should explicitly flag when it is uncertain about a high-risk judgment.
