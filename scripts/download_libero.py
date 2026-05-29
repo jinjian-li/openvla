@@ -19,7 +19,7 @@ def get_file_list():
     print(f"Fetching file list from {url}...", flush=True)
     resp = requests.get(url, timeout=60)
     resp.raise_for_status()
-    files = [f["path"] for f in resp.json()]
+    files = [f["path"] for f in resp.json() if f.get("type") == "file"]
     print(f"Total files to download: {len(files)}", flush=True)
     return files
 
